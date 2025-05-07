@@ -27,7 +27,7 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
 from functools import partial
 
-from gnome import crystal, gnome, gnn
+from GNoME import crystal, gnome, gnn
 from .representation_analysis import GNNExplainer, IntegratedGradients, SHAP
 
 Array = jnp.ndarray

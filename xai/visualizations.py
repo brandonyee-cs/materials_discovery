@@ -29,7 +29,7 @@ import networkx as nx
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Union
 
-from gnome import crystal, gnome, gnn
+from GNoME import crystal, gnome, gnn
 
 Array = jnp.ndarray
 GraphsTuple = jraph.GraphsTuple
