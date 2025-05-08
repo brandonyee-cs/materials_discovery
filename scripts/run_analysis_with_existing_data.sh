@@ -1,6 +1,6 @@
 #!/bin/bash
-# run_complete_analysis.sh
-# Downloads GNoME data and runs all XAI analysis scripts
+# run_analysis_with_existing_data.sh
+# Runs XAI analysis scripts using existing GNoME data
 
 # Exit on error
 set -e
@@ -20,7 +20,7 @@ mkdir -p "${OUTPUT_DIR}"
 LOG_FILE="${OUTPUT_DIR}/analysis_log.txt"
 touch "${LOG_FILE}"
 
-echo "Starting GNoME data download and XAI analysis at $(date)" | tee -a "${LOG_FILE}"
+echo "Starting XAI analysis with existing data at $(date)" | tee -a "${LOG_FILE}"
 
 # ===== STEP 0: INSTALL OR UPDATE DEPENDENCIES =====
 echo "Step 0: Installing or updating dependencies..." | tee -a "${LOG_FILE}"
@@ -42,43 +42,29 @@ BENCHMARK_DIR="${OUTPUT_DIR}/benchmark"
 
 mkdir -p "${ANALYSIS_DIR}" "${COUNTERFACTUAL_DIR}" "${REFINEMENT_DIR}" "${BENCHMARK_DIR}"
 
-# ===== STEP 1: DOWNLOAD GNOME DATA =====
-echo "Step 1: Downloading GNoME dataset using wget..." | tee -a "${LOG_FILE}"
-python3 "${PROJECT_ROOT}/scripts/download_data_wget.py" --data_dir="${DATA_DIR}" 2>&1 | tee -a "${LOG_FILE}"
-echo "GNoME data download complete." | tee -a "${LOG_FILE}"
-echo "----------------------------------------" | tee -a "${LOG_FILE}"
-
-# ===== STEP 2: CONVERT DATA FORMAT =====
-echo "Step 2: Converting GNoME data to crystal_data.pkl format..." | tee -a "${LOG_FILE}"
-python3 "${PROJECT_ROOT}/scripts/improved_prepare_crystal_data.py" \
-  --input_dir="${DATA_DIR}/gnome_data" \
-  --output_file="${DATA_DIR}/crystal_data.pkl" \
-  --max_structures=50 \
-  2>&1 | tee -a "${LOG_FILE}"
-
-# If the crystal_data.pkl is empty or missing, create dummy dataset
-if [ ! -s "${DATA_DIR}/crystal_data.pkl" ]; then
-  echo "No structures found in crystal_data.pkl, creating dummy dataset..." | tee -a "${LOG_FILE}"
-  mkdir -p "${DATA_DIR}/dummy"
-  python3 "${PROJECT_ROOT}/scripts/create_dummy_structures.py" "${DATA_DIR}/crystal_data.pkl" 10
+# ===== STEP 1: VERIFY DATA EXISTS =====
+echo "Step 1: Verifying data exists..." | tee -a "${LOG_FILE}"
+if [ ! -f "${DATA_DIR}/crystal_data.pkl" ]; then
+    echo "Error: crystal_data.pkl not found in ${DATA_DIR}" | tee -a "${LOG_FILE}"
+    exit 1
 fi
-echo "Data conversion complete." | tee -a "${LOG_FILE}"
+echo "Data verification complete." | tee -a "${LOG_FILE}"
 echo "----------------------------------------" | tee -a "${LOG_FILE}"
 
-# ===== STEP 3: FIX JAX TREE IMPORTS =====
-echo "Step 3: Fixing JAX tree imports..." | tee -a "${LOG_FILE}"
+# ===== STEP 2: FIX JAX TREE IMPORTS =====
+echo "Step 2: Fixing JAX tree imports..." | tee -a "${LOG_FILE}"
 python3 "${PROJECT_ROOT}/fix_jax_imports.py" 2>&1 | tee -a "${LOG_FILE}"
 echo "JAX tree imports fixed." | tee -a "${LOG_FILE}"
 echo "----------------------------------------" | tee -a "${LOG_FILE}"
 
-# ===== STEP 4: LOAD PRETRAINED GNoME MODEL =====
-echo "Step 4: Loading pretrained GNoME model..." | tee -a "${LOG_FILE}"
-python3 "${PROJECT_ROOT}/scripts/load_model.py" \
-  --checkpoint_dir="${MODELS_DIR}/gnome_model" \
-  --output_dir="${MODELS_DIR}/gnome_model" \
+# ===== STEP 3: PRETRAIN GNoME MODEL =====
+echo "Step 3: Pretraining GNoME model..." | tee -a "${LOG_FILE}"
+python3 "${PROJECT_ROOT}/scripts/pretrain_model.py" \
   --data_file="${DATA_DIR}/crystal_data.pkl" \
+  --output_dir="${MODELS_DIR}/gnome_model" \
+  --epochs=150 \
   2>&1 | tee -a "${LOG_FILE}"
-echo "Model loading complete." | tee -a "${LOG_FILE}"
+echo "Model pretraining complete." | tee -a "${LOG_FILE}"
 echo "----------------------------------------" | tee -a "${LOG_FILE}"
 
 # Define data file and model paths for XAI scripts
@@ -87,8 +73,8 @@ GNOME_MODEL="${MODELS_DIR}/gnome_model"
 MLIP_MODEL="${MODELS_DIR}/mlip_model"
 NUM_EXAMPLES=5
 
-# ===== STEP 5: ANALYZE REPRESENTATIONS =====
-echo "Step 5: Analyzing learned representations" | tee -a "${LOG_FILE}"
+# ===== STEP 4: ANALYZE REPRESENTATIONS =====
+echo "Step 4: Analyzing learned representations" | tee -a "${LOG_FILE}"
 python3 "${PROJECT_ROOT}/scripts/analyze_representations.py" \
   --model_dirs "${GNOME_MODEL}" \
   --data_file "${CRYSTAL_DATA}" \
@@ -103,8 +89,8 @@ python3 "${PROJECT_ROOT}/scripts/analyze_representations.py" \
 echo "Representation analysis complete." | tee -a "${LOG_FILE}"
 echo "----------------------------------------" | tee -a "${LOG_FILE}"
 
-# ===== STEP 6: GENERATE COUNTERFACTUALS =====
-echo "Step 6: Generating counterfactual explanations" | tee -a "${LOG_FILE}"
+# ===== STEP 5: GENERATE COUNTERFACTUALS =====
+echo "Step 5: Generating counterfactual explanations" | tee -a "${LOG_FILE}"
 python3 "${PROJECT_ROOT}/scripts/generate_counterfactuals.py" \
   --model_dir "${GNOME_MODEL}" \
   --data_file "${CRYSTAL_DATA}" \
@@ -119,8 +105,8 @@ python3 "${PROJECT_ROOT}/scripts/generate_counterfactuals.py" \
 echo "Counterfactual generation complete." | tee -a "${LOG_FILE}"
 echo "----------------------------------------" | tee -a "${LOG_FILE}"
 
-# ===== STEP 7: REFINE CANDIDATES =====
-echo "Step 7: Refining crystal structure prediction" | tee -a "${LOG_FILE}"
+# ===== STEP 6: REFINE CANDIDATES =====
+echo "Step 6: Refining crystal structure prediction" | tee -a "${LOG_FILE}"
 python3 "${PROJECT_ROOT}/scripts/refine_candidates.py" \
   --model_dir "${GNOME_MODEL}" \
   --data_file "${CRYSTAL_DATA}" \
@@ -133,8 +119,8 @@ python3 "${PROJECT_ROOT}/scripts/refine_candidates.py" \
 echo "Candidate refinement complete." | tee -a "${LOG_FILE}"
 echo "----------------------------------------" | tee -a "${LOG_FILE}"
 
-# ===== STEP 8: BENCHMARK XAI METHODS =====
-echo "Step 8: Benchmarking XAI methods" | tee -a "${LOG_FILE}"
+# ===== STEP 7: BENCHMARK XAI METHODS =====
+echo "Step 7: Benchmarking XAI methods" | tee -a "${LOG_FILE}"
 python3 "${PROJECT_ROOT}/scripts/benchmark_xai.py" \
   --model_dir "${GNOME_MODEL}" \
   --data_file "${CRYSTAL_DATA}" \
@@ -160,14 +146,13 @@ cat > "${OUTPUT_DIR}/summary_report.md" << EOF
 **Data:** ${CRYSTAL_DATA}
 
 ## Steps Performed
-1. Downloaded GNoME dataset using wget
-2. Converted data to crystal_data.pkl format
-3. Fixed JAX tree imports
-4. Loaded pretrained GNoME model
-5. Analyzed learned representations
-6. Generated counterfactual explanations
-7. Refined crystal structure prediction
-8. Benchmarked XAI methods
+1. Verified existing data
+2. Fixed JAX tree imports
+3. Pretrained GNoME model
+4. Analyzed learned representations
+5. Generated counterfactual explanations
+6. Refined crystal structure prediction
+7. Benchmarked XAI methods
 
 ## Results Overview
 
@@ -198,3 +183,7 @@ cat > "${OUTPUT_DIR}/summary_report.md" << EOF
 EOF
 
 echo "Analysis complete! See ${OUTPUT_DIR}/summary_report.md for a summary of results." | tee -a "${LOG_FILE}"
+
+# After loading the model and graph
+print("Loaded model expects node features:", model.variables['params']['Node Update 0']['Dense_0']['kernel'].shape[0])
+print("Graph node features provided:", graph.nodes.shape[1]) 

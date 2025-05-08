@@ -194,6 +194,16 @@ class IntegratedGradients:
         Returns:
             attributions: Dictionary containing attributions for nodes, edges, and globals
         """
+        # Convert only feature tensors to float32, preserving integer indices
+        def convert_to_float(x):
+            if jnp.issubdtype(x.dtype, jnp.integer) and x.shape and x.shape[0] > 0:
+                # Check if this is likely an index array (1D array of small integers)
+                if x.ndim == 1 and jnp.max(x) < 1000:
+                    return x  # Keep indices as integers
+            return x.astype(jnp.float32) if jnp.issubdtype(x.dtype, jnp.integer) else x
+        
+        graph = jax.tree_map(convert_to_float, graph)
+        
         # Create baseline (zero) if not provided
         if baseline is None:
             # Handle tuple edges
@@ -211,17 +221,24 @@ class IntegratedGradients:
                 n_node=graph.n_node,
                 n_edge=graph.n_edge
             )
+        else:
+            # Convert baseline feature tensors to float32
+            baseline = jax.tree_map(convert_to_float, baseline)
         
         # Define gradient function for the model
         def gradient_fn(interp_graph):
             def pred_fn(g):
                 return jnp.sum(self.model(g, None, None))
             
-            return jax.grad(pred_fn)(interp_graph)
+            return jax.grad(pred_fn, allow_int=True)(interp_graph)
         
         # Compute Integrated Gradients
         nodes_attr = jnp.zeros_like(graph.nodes)
-        edges_attr = jnp.zeros_like(graph.edges)
+        # Handle tuple edges
+        if isinstance(graph.edges, tuple):
+            edges_attr = tuple(jnp.zeros_like(e) for e in graph.edges)
+        else:
+            edges_attr = jnp.zeros_like(graph.edges)
         globals_attr = jnp.zeros_like(graph.globals)
         
         # Approximate integral using Riemann sum
@@ -231,7 +248,7 @@ class IntegratedGradients:
             # Create interpolated graph
             interp_graph = GraphsTuple(
                 nodes=baseline.nodes + alpha * (graph.nodes - baseline.nodes),
-                edges=baseline.edges + alpha * (graph.edges - baseline.edges),
+                edges=tuple(b + alpha * (g - b) for g, b in zip(graph.edges, baseline.edges)) if isinstance(graph.edges, tuple) else baseline.edges + alpha * (graph.edges - baseline.edges),
                 receivers=graph.receivers,
                 senders=graph.senders,
                 globals=baseline.globals + alpha * (graph.globals - baseline.globals),
@@ -244,12 +261,18 @@ class IntegratedGradients:
             
             # Accumulate gradients
             nodes_attr += grads.nodes
-            edges_attr += grads.edges
+            if isinstance(edges_attr, tuple):
+                edges_attr = tuple(e + g for e, g in zip(edges_attr, grads.edges))
+            else:
+                edges_attr += grads.edges
             globals_attr += grads.globals
         
         # Multiply by input - baseline and divide by steps
         nodes_attr = (graph.nodes - baseline.nodes) * nodes_attr / self.steps
-        edges_attr = (graph.edges - baseline.edges) * edges_attr / self.steps
+        if isinstance(edges_attr, tuple):
+            edges_attr = tuple((g - b) * e / self.steps for e, g, b in zip(edges_attr, graph.edges, baseline.edges))
+        else:
+            edges_attr = (graph.edges - baseline.edges) * edges_attr / self.steps
         globals_attr = (graph.globals - baseline.globals) * globals_attr / self.steps
         
         return {
@@ -329,7 +352,11 @@ class SHAP:
         
         # Initialize Shapley values
         nodes_shap = jnp.zeros_like(graph.nodes)
-        edges_shap = jnp.zeros_like(graph.edges)
+        # Handle tuple edges
+        if isinstance(graph.edges, tuple):
+            edges_shap = tuple(jnp.zeros_like(e) for e in graph.edges)
+        else:
+            edges_shap = jnp.zeros_like(graph.edges)
         globals_shap = jnp.zeros_like(graph.globals)
         
         # Compute Shapley values using sampling-based approximation
@@ -340,14 +367,20 @@ class SHAP:
             node_perm = jax.random.permutation(subkey, graph.nodes.shape[0])
             
             key, subkey = jax.random.split(key)
-            edge_perm = jax.random.permutation(subkey, graph.edges.shape[0])
+            if isinstance(graph.edges, tuple):
+                edge_perm = tuple(jax.random.permutation(subkey, e.shape[0]) for e in graph.edges)
+            else:
+                edge_perm = jax.random.permutation(subkey, graph.edges.shape[0])
             
             key, subkey = jax.random.split(key)
             global_perm = jax.random.permutation(subkey, graph.globals.shape[0])
             
             # Initialize masks
             node_mask = jnp.zeros_like(graph.nodes)
-            edge_mask = jnp.zeros_like(graph.edges)
+            if isinstance(graph.edges, tuple):
+                edge_mask = tuple(jnp.zeros_like(e) for e in graph.edges)
+            else:
+                edge_mask = jnp.zeros_like(graph.edges)
             global_mask = jnp.zeros_like(graph.globals)
             
             # Previous prediction

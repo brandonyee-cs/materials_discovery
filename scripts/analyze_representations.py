@@ -52,24 +52,49 @@ def load_models(model_dirs: List[str]):
         print(f"Loading model from {model_dir}...")
         config, model, params = gnome.load_model(model_dir)
         
-        # Create dummy data for initialization
-        dummy_graph = jraph.GraphsTuple(
-            nodes=jnp.zeros((1, 94)),  # One-hot encoding for elements
-            edges=jnp.zeros((1, 3)),   # Edge vectors
-            receivers=jnp.array([0]),
-            senders=jnp.array([0]),
-            globals=jnp.zeros((1,)),
-            n_node=jnp.array([1]),
-            n_edge=jnp.array([1])
-        )
-        dummy_positions = jnp.zeros((1, 3))  # Single atom at origin
-        dummy_box = jnp.eye(3)  # Identity matrix for box
-        
-        # Initialize model with dummy data
-        params = model.init(jax.random.PRNGKey(0), dummy_graph, dummy_positions, dummy_box)
+        # Get expected dimensions from model parameters
+        node_embed_dim = params['params']['Node Embedding']['kernel'].shape[0]
+        edge_embed_dim = params['params']['Edge Embedding']['kernel'].shape[0]
         
         # Create a callable model function that uses the loaded parameters
         def model_fn(graph, positions=None, box=None):
+            # Ensure node features match expected dimensions
+            if graph.nodes.shape[1] != node_embed_dim:
+                current_dim = graph.nodes.shape[1]
+                if current_dim < node_embed_dim:
+                    # Pad with zeros
+                    padding = jnp.zeros((graph.nodes.shape[0], node_embed_dim - current_dim))
+                    graph = graph._replace(nodes=jnp.concatenate([graph.nodes, padding], axis=1))
+                else:
+                    # Truncate
+                    graph = graph._replace(nodes=graph.nodes[:, :node_embed_dim])
+            
+            # Handle edge features - could be tuple or array
+            if isinstance(graph.edges, tuple):
+                # For tuple edges, ensure each component has correct dimensions
+                new_edges = []
+                for edge_tensor in graph.edges:
+                    current_dim = edge_tensor.shape[1]
+                    if current_dim < edge_embed_dim:
+                        # Pad with zeros
+                        padding = jnp.zeros((edge_tensor.shape[0], edge_embed_dim - current_dim))
+                        new_edges.append(jnp.concatenate([edge_tensor, padding], axis=1))
+                    else:
+                        # Truncate
+                        new_edges.append(edge_tensor[:, :edge_embed_dim])
+                graph = graph._replace(edges=tuple(new_edges))
+            else:
+                # For array edges, handle as before
+                if graph.edges.shape[1] != edge_embed_dim:
+                    current_dim = graph.edges.shape[1]
+                    if current_dim < edge_embed_dim:
+                        # Pad with zeros
+                        padding = jnp.zeros((graph.edges.shape[0], edge_embed_dim - current_dim))
+                        graph = graph._replace(edges=jnp.concatenate([graph.edges, padding], axis=1))
+                    else:
+                        # Truncate
+                        graph = graph._replace(edges=graph.edges[:, :edge_embed_dim])
+            
             return model.apply(params, graph, positions, box)
         
         models.append(model_fn)
