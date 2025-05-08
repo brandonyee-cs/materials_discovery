@@ -34,17 +34,8 @@ from GNoME import gnome
 from xai import representation_analysis
 from xai import visualizations
 
-
 def load_models(model_dirs: List[str]):
-    """Load GNoME models from directories.
-    
-    Args:
-        model_dirs: List of directories containing model checkpoints
-        
-    Returns:
-        models: List of loaded models
-        configs: List of model configurations
-    """
+    """Load GNoME models from directories."""
     models = []
     configs = []
     
@@ -52,49 +43,23 @@ def load_models(model_dirs: List[str]):
         print(f"Loading model from {model_dir}...")
         config, model, params = gnome.load_model(model_dir)
         
-        # Get expected dimensions from model parameters
-        node_embed_dim = params['params']['Node Embedding']['kernel'].shape[0]
-        edge_embed_dim = params['params']['Edge Embedding']['kernel'].shape[0]
+        # Check if the model parameters contain the expected dimensions
+        if 'params' in params and 'Node Update 0' in params['params'] and 'Dense_0' in params['params']['Node Update 0']:
+            actual_dim = params['params']['Node Update 0']['Dense_0']['kernel'].shape[0]
+            expected_dim = config.mlp_width[0] if hasattr(config, 'mlp_width') and config.mlp_width else 32
+            
+            print(f"Model parameters expect dimension: {actual_dim}")
+            print(f"Configuration specifies: {expected_dim}")
+            
+            # Update config if needed
+            if actual_dim != expected_dim and hasattr(config, 'mlp_width') and config.mlp_width:
+                print(f"Updating config mlp_width from {config.mlp_width} to match parameters")
+                if isinstance(config.mlp_width, tuple) and len(config.mlp_width) > 1:
+                    config.mlp_width = (actual_dim,) + config.mlp_width[1:]
         
         # Create a callable model function that uses the loaded parameters
         def model_fn(graph, positions=None, box=None):
-            # Ensure node features match expected dimensions
-            if graph.nodes.shape[1] != node_embed_dim:
-                current_dim = graph.nodes.shape[1]
-                if current_dim < node_embed_dim:
-                    # Pad with zeros
-                    padding = jnp.zeros((graph.nodes.shape[0], node_embed_dim - current_dim))
-                    graph = graph._replace(nodes=jnp.concatenate([graph.nodes, padding], axis=1))
-                else:
-                    # Truncate
-                    graph = graph._replace(nodes=graph.nodes[:, :node_embed_dim])
-            
-            # Handle edge features - could be tuple or array
-            if isinstance(graph.edges, tuple):
-                # For tuple edges, ensure each component has correct dimensions
-                new_edges = []
-                for edge_tensor in graph.edges:
-                    current_dim = edge_tensor.shape[1]
-                    if current_dim < edge_embed_dim:
-                        # Pad with zeros
-                        padding = jnp.zeros((edge_tensor.shape[0], edge_embed_dim - current_dim))
-                        new_edges.append(jnp.concatenate([edge_tensor, padding], axis=1))
-                    else:
-                        # Truncate
-                        new_edges.append(edge_tensor[:, :edge_embed_dim])
-                graph = graph._replace(edges=tuple(new_edges))
-            else:
-                # For array edges, handle as before
-                if graph.edges.shape[1] != edge_embed_dim:
-                    current_dim = graph.edges.shape[1]
-                    if current_dim < edge_embed_dim:
-                        # Pad with zeros
-                        padding = jnp.zeros((graph.edges.shape[0], edge_embed_dim - current_dim))
-                        graph = graph._replace(edges=jnp.concatenate([graph.edges, padding], axis=1))
-                    else:
-                        # Truncate
-                        graph = graph._replace(edges=graph.edges[:, :edge_embed_dim])
-            
+            # Don't modify dimensions - let the model handle this
             return model.apply(params, graph, positions, box)
         
         models.append(model_fn)
