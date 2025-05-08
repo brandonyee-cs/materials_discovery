@@ -196,9 +196,15 @@ class IntegratedGradients:
         """
         # Create baseline (zero) if not provided
         if baseline is None:
+            # Handle tuple edges
+            if isinstance(graph.edges, tuple):
+                edge_zeros = tuple(jnp.zeros_like(e) for e in graph.edges)
+            else:
+                edge_zeros = jnp.zeros_like(graph.edges)
+                
             baseline = GraphsTuple(
                 nodes=jnp.zeros_like(graph.nodes),
-                edges=jnp.zeros_like(graph.edges),
+                edges=edge_zeros,
                 receivers=graph.receivers,
                 senders=graph.senders,
                 globals=jnp.zeros_like(graph.globals),
@@ -282,9 +288,15 @@ class SHAP:
         """
         # If no background graphs provided, use zero baseline
         if background_graphs is None:
+            # Handle tuple edges
+            if isinstance(graph.edges, tuple):
+                edge_zeros = tuple(jnp.zeros_like(e) for e in graph.edges)
+            else:
+                edge_zeros = jnp.zeros_like(graph.edges)
+                
             background_graph = GraphsTuple(
                 nodes=jnp.zeros_like(graph.nodes),
-                edges=jnp.zeros_like(graph.edges),
+                edges=edge_zeros,
                 receivers=graph.receivers,
                 senders=graph.senders,
                 globals=jnp.zeros_like(graph.globals),

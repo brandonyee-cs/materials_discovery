@@ -158,7 +158,12 @@ def graph_featurizer(
           box, graph.n_node, axis=0, total_repeat_length=len(position)
       )
       edge_box = node_box[graph.senders]
-      _, Ts = graph.edges
+      
+      # Assume Ts is all zeros if graph.edges doesn't contain displacement info
+      Ts = jnp.zeros_like(Rb)
+      if hasattr(graph.edges, "__iter__") and len(graph.edges) == 2:
+          _, Ts = graph.edges
+      
       dR = vmap(space.transform)(edge_box, Ra - Rb - Ts)
       if box_perturbation is not None:
         box_perturbation = jnp.repeat(
@@ -179,7 +184,6 @@ def graph_featurizer(
         receivers=graph.receivers,
         globals=global_feature_fn(jnp.zeros([graph.n_node.shape[0], 1])),
     )
-
   return featurize
 
 
@@ -227,7 +231,19 @@ class CrystalEnergyModel(nn.Module):
     is_compositional = positions is None
     nonlinearity = self.mlp_nonlinearity
 
-    featurizer_fn = standard_gaussian_features()
+    # Initialize featurizer
+    if self.featurizer == 'gaussian':
+        r_0 = jnp.linspace(0.05, 4, 30)
+        edge_feature_fn = partial(gaussian_edge_features, r_0)
+        featurizer_fn = graph_featurizer(
+            lambda graph, dR: graph.nodes,
+            edge_feature_fn,
+            lambda g: g
+        )
+    else:
+        raise ValueError(f"Unknown featurizer: {self.featurizer}")
+
+    # Apply featurization
     graph = featurizer_fn(graph, positions, box, box_perturbation)
 
     mlp_fn = partial(mlp, self.mlp_width, nonlinearity)

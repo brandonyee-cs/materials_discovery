@@ -44,14 +44,35 @@ NUM_ELEMENTS = 94
 
 PyTree = util.PyTree
 
+def ensure_config_defaults(cfg: ConfigDict) -> ConfigDict:
+  """Ensure config has all required keys with default values."""
+  # List of required keys with their default values
+  defaults = {
+    'epochs': 1,
+    'epoch_size': 100,
+    'train_batch_size': 1,
+    'warmup_steps': 0,
+    'l2_regularization': 0.0,
+    'schedule': 'constant',
+    'learning_rate': 0.001,
+  }
+  
+  # Add any missing keys
+  for key, default_value in defaults.items():
+    if not hasattr(cfg, key):
+      cfg[key] = default_value
+  
+  return cfg
 
 def model_from_config(cfg: ConfigDict) -> nn.Module:
   model_family = cfg.get('model_family', 'nequip')
   if model_family == 'nequip':
     return nequip.model_from_config(cfg)
+  elif model_family == 'crystal':
+    from . import crystal
+    return crystal.crystal_energy_model(cfg)
   else:
     raise ValueError(f'Unrecognized model family: {model_family}')
-
 
 def minimum_batch_size(cfg: ConfigDict) -> int:
   if not hasattr(cfg, 'train_batch_size'):
@@ -86,16 +107,20 @@ def scale_lr_on_plateau(
 
   def update_fn(updates, state, params=None):
     del params
-    updates = jax.tree.map(lambda g: g * state.step_size, updates)
+    updates = jax.tree_util.tree_map(lambda g: g * state.step_size, updates)
     return updates, state
 
   return optax.GradientTransformation(init_fn, update_fn)
 
-
 def optimizer(cfg: ConfigDict) -> optax.OptState:
   epoch_size = cfg.epoch_size if hasattr(cfg, 'epoch_size') else -1
   batch_size = minimum_batch_size(cfg)
-  total_steps = cfg.epochs * (epoch_size // batch_size)
+  
+  # Add default value for epochs
+  epochs = cfg.epochs if hasattr(cfg, 'epochs') else 1
+  total_steps = epochs * (epoch_size // batch_size)
+  
+  # Add default value for warmup_steps
   warmup_steps = cfg.get('warmup_steps', 0)
 
   if cfg.schedule == 'constant':
@@ -127,28 +152,34 @@ def load_model(directory: str) -> Tuple[ConfigDict, nn.Module, PyTree]:
   with open(os.path.join(directory, 'config.json'), 'r') as f:
     c = json.loads(json.loads(f.read()))
     c = ConfigDict(c)
+    
+  # Ensure config has all required keys
+  c = ensure_config_defaults(c)
 
   # Now initialize the model and the optimizer functions.
   model = model_from_config(c)
   opt_init, _ = optimizer(c)
-
+  
+  # Create dummy data for initialization
   graph = GraphsTuple(
       ShapedArray((1, NUM_ELEMENTS), f32),  # Nodes     (nodes, features)
-      ShapedArray((1, 3), f32),  # dR        (edges, spatial)
+      (ShapedArray((1, 3), f32), ShapedArray((1, 3), f32)),  # (edge_features, translations)
       ShapedArray((1,), i32),  # senders   (edges,)
       ShapedArray((1,), i32),  # receivers (edges,)
       ShapedArray((1, 1), f32),  # globals   (graphs,)
       ShapedArray((1,), i32),  # n_node    (graphs,)
-      ShapedArray((1,), i32),
-  )  # n_edge    (graphs,)
+      ShapedArray((1,), i32),  # n_edge    (graphs,)
+  )
+  positions = ShapedArray((1, 3), f32)  # Single atom at origin
+  box = ShapedArray((3, 3), f32)  # Identity matrix for box
 
-  def init_opt_and_model(graph):
+  def init_opt_and_model(graph, positions, box):
     key = random.PRNGKey(0)
-    params = model.init(key, graph)
+    params = model.init(key, graph, positions, box)
     state = opt_init(params)
     return params, state
 
-  abstract_params, abstract_state = eval_shape(init_opt_and_model, graph)
+  abstract_params, abstract_state = eval_shape(init_opt_and_model, graph, positions, box)
 
   # Now that we have the structure, load the data using FLAX checkpointing.
   ckpt_data = (0, abstract_params, abstract_state)

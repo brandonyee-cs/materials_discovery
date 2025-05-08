@@ -167,6 +167,11 @@ def generate_counterfactuals(args):
                         save_path=os.path.join(args.output_dir, f'cf_substitution_{i}.png')
                     )
                     plt.close(fig)
+                
+                # Evaluate DFT feasibility if MLIP model is available
+                if mlip_model_fn is not None:
+                    energy = cf_generator.evaluate_dft_feasibility(cf_graph, mlip_model_fn)
+                    print(f"Estimated energy for counterfactual: {energy}")
             
         elif args.transformation == 'displacement':
             if positions[i] is not None:
@@ -199,17 +204,13 @@ def generate_counterfactuals(args):
                     save_path=os.path.join(args.output_dir, f'cf_displacement_{i}.png')
                 )
                 plt.close(fig)
+                
+                # Evaluate DFT feasibility if MLIP model is available
+                if mlip_model_fn is not None:
+                    energy = mlip_model_fn(graphs[i], new_positions, boxes[i])
+                    print(f"Estimated energy for counterfactual: {energy}")
             else:
                 print(f"Skipping displacement for structure {i+1} (no positions available)")
-        
-        # Evaluate DFT feasibility if MLIP model is available
-        if mlip_model_fn is not None:
-            if args.transformation == 'substitution':
-                energy = cf_generator.evaluate_dft_feasibility(cf_graph, mlip_model_fn)
-                print(f"Estimated energy for counterfactual: {energy}")
-            elif args.transformation == 'displacement' and positions[i] is not None:
-                energy = mlip_model_fn(graphs[i], new_positions, boxes[i])
-                print(f"Estimated energy for counterfactual: {energy}")
     
     # Analyze counterfactual patterns if multiple examples are processed
     if args.num_examples > 1:

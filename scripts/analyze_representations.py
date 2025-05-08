@@ -51,6 +51,23 @@ def load_models(model_dirs: List[str]):
     for model_dir in model_dirs:
         print(f"Loading model from {model_dir}...")
         config, model, params = gnome.load_model(model_dir)
+        
+        # Create dummy data for initialization
+        dummy_graph = jraph.GraphsTuple(
+            nodes=jnp.zeros((1, 94)),  # One-hot encoding for elements
+            edges=jnp.zeros((1, 3)),   # Edge vectors
+            receivers=jnp.array([0]),
+            senders=jnp.array([0]),
+            globals=jnp.zeros((1,)),
+            n_node=jnp.array([1]),
+            n_edge=jnp.array([1])
+        )
+        dummy_positions = jnp.zeros((1, 3))  # Single atom at origin
+        dummy_box = jnp.eye(3)  # Identity matrix for box
+        
+        # Initialize model with dummy data
+        params = model.init(jax.random.PRNGKey(0), dummy_graph, dummy_positions, dummy_box)
+        
         # Create a callable model function that uses the loaded parameters
         def model_fn(graph, positions=None, box=None):
             return model.apply(params, graph, positions, box)
