@@ -208,7 +208,8 @@ class IntegratedGradients:
         if baseline is None:
             # Handle tuple edges
             if isinstance(graph.edges, tuple):
-                edge_zeros = tuple(jnp.zeros_like(e) for e in graph.edges)
+                edge_data, edge_info = graph.edges
+                edge_zeros = (jnp.zeros_like(edge_data), edge_info)
             else:
                 edge_zeros = jnp.zeros_like(graph.edges)
                 
@@ -224,6 +225,91 @@ class IntegratedGradients:
         else:
             # Convert baseline feature tensors to float32
             baseline = jax.tree_map(convert_to_float, baseline)
+        
+        # Define gradient function for the model
+        def gradient_fn(interp_graph):
+            def pred_fn(g):
+                return jnp.sum(self.model(g, None, None))
+            
+            return jax.grad(pred_fn, allow_int=True)(interp_graph)
+        
+        # Compute Integrated Gradients
+        nodes_attr = jnp.zeros_like(graph.nodes)
+        globals_attr = jnp.zeros_like(graph.globals)
+        
+        # Handle edges based on type
+        if isinstance(graph.edges, tuple):
+            edge_data, _ = graph.edges
+            edges_attr = jnp.zeros_like(edge_data)
+        else:
+            edges_attr = jnp.zeros_like(graph.edges)
+        
+        # Approximate integral using Riemann sum
+        for i in range(self.steps):
+            alpha = i / self.steps
+            
+            # Create interpolated nodes and globals
+            interp_nodes = baseline.nodes + alpha * (graph.nodes - baseline.nodes)
+            interp_globals = baseline.globals + alpha * (graph.globals - baseline.globals)
+            
+            # Handle different edge formats for interpolation
+            if isinstance(graph.edges, tuple):
+                edge_data, edge_info = graph.edges
+                if isinstance(baseline.edges, tuple):
+                    baseline_edge_data, _ = baseline.edges
+                else:
+                    baseline_edge_data = jnp.zeros_like(edge_data)
+                
+                interp_edge_data = baseline_edge_data + alpha * (edge_data - baseline_edge_data)
+                interp_edges = (interp_edge_data, edge_info)
+            else:
+                interp_edges = baseline.edges + alpha * (graph.edges - baseline.edges)
+            
+            # Create interpolated graph
+            interp_graph = GraphsTuple(
+                nodes=interp_nodes,
+                edges=interp_edges,
+                receivers=graph.receivers,
+                senders=graph.senders,
+                globals=interp_globals,
+                n_node=graph.n_node,
+                n_edge=graph.n_edge
+            )
+            
+            # Get gradients
+            grads = gradient_fn(interp_graph)
+            
+            # Accumulate gradients
+            nodes_attr += grads.nodes
+            globals_attr += grads.globals
+            
+            # Handle different edge formats for accumulation
+            if isinstance(grads.edges, tuple) and isinstance(edges_attr, jnp.ndarray):
+                grad_edge_data, _ = grads.edges
+                edges_attr += grad_edge_data
+            elif isinstance(grads.edges, jnp.ndarray) and isinstance(edges_attr, jnp.ndarray):
+                edges_attr += grads.edges
+            else:
+                # Handle other edge format combinations if needed
+                pass
+            
+        # Multiply by input - baseline and divide by steps
+        nodes_attr = (graph.nodes - baseline.nodes) * nodes_attr / self.steps
+        globals_attr = (graph.globals - baseline.globals) * globals_attr / self.steps
+        
+        # Handle different edge formats for final calculation
+        if isinstance(graph.edges, tuple) and isinstance(baseline.edges, tuple):
+            edge_data, _ = graph.edges
+            baseline_edge_data, _ = baseline.edges
+            edges_attr = (edge_data - baseline_edge_data) * edges_attr / self.steps
+        elif isinstance(graph.edges, jnp.ndarray) and isinstance(baseline.edges, jnp.ndarray):
+            edges_attr = (graph.edges - baseline.edges) * edges_attr / self.steps
+        
+        return {
+            'nodes': nodes_attr,
+            'edges': edges_attr,
+            'globals': globals_attr
+        }
         
         # Define gradient function for the model
         def gradient_fn(interp_graph):
